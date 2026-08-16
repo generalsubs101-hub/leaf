@@ -1,292 +1,26 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useLeaf } from "./lib/store.js";
+import { tableMoney } from "./lib/model.js";
+import {
+  MENU as SHIPPED_MENU, CATEGORIES, UNAVAILABLE, CAT_STATION,
+  effectiveMenu, indexBy,
+} from "./lib/menu.js";
+
+/* Which table this device is sitting at. In production the QR carries a
+   signed table token and this is read from the URL. */
+const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
+const BRANCH_ID = params.get("b") || "b1";
+const TABLE_NO = Number(params.get("t") || 12);
 
 /* ------------------------------------------------------------------ *
  *  BEIT AL SIDR — table-side ordering
  *  Guest surface for the QR / NFC ordering platform.
  * ------------------------------------------------------------------ */
 
-const EDIT_WINDOW_SEC = 90;
-const SERVICE_RATE = 0.10;
-const TAX_RATE = 0.16;
-
-/* ---------------------------- option groups ---------------------------- */
-
-const G = {
-  breadHummus: {
-    id: "bread", name: "Bread", nameAr: "الخبز", type: "single", required: true,
-    options: [
-      { id: "arabic", name: "Arabic bread", nameAr: "خبز عربي", price: 0 },
-      { id: "brown", name: "Whole wheat", nameAr: "خبز أسمر", price: 0.25 },
-      { id: "gf", name: "Gluten-free", nameAr: "خالٍ من الغلوتين", price: 0.75 },
-      { id: "none", name: "No bread", nameAr: "بدون خبز", price: 0 },
-    ],
-  },
-  hummusTop: {
-    id: "top", name: "Topping", nameAr: "الإضافات", type: "multi", required: false,
-    options: [
-      { id: "pine", name: "Toasted pine nuts", nameAr: "صنوبر محمّص", price: 1.0 },
-      { id: "lamb", name: "Minced lamb", nameAr: "لحمة مفرومة", price: 2.5 },
-      { id: "oil", name: "Extra olive oil", nameAr: "زيت زيتون إضافي", price: 0 },
-      { id: "chilli", name: "Chilli & sumac", nameAr: "فليفلة وسمّاق", price: 0.5 },
-    ],
-  },
-  mezzeSize: {
-    id: "size", name: "Portion", nameAr: "الحجم", type: "single", required: true,
-    options: [
-      { id: "s", name: "Small", nameAr: "صغير", price: 0 },
-      { id: "l", name: "Large (shares 3–4)", nameAr: "كبير (يكفي ٣–٤)", price: 2.0 },
-    ],
-  },
-  doneness: {
-    id: "done", name: "Cooked", nameAr: "درجة النضج", type: "single", required: true,
-    options: [
-      { id: "medium", name: "Medium", nameAr: "وسط", price: 0 },
-      { id: "mediumwell", name: "Medium well", nameAr: "وسط مائل للنضج", price: 0 },
-      { id: "well", name: "Well done", nameAr: "ناضج تماماً", price: 0 },
-    ],
-  },
-  spice: {
-    id: "spice", name: "Heat", nameAr: "الحرارة", type: "single", required: true,
-    options: [
-      { id: "none", name: "Not spicy", nameAr: "غير حار", price: 0 },
-      { id: "mild", name: "Mild", nameAr: "خفيف", price: 0 },
-      { id: "hot", name: "Hot", nameAr: "حار", price: 0 },
-    ],
-  },
-  grillSide: {
-    id: "side", name: "Side", nameAr: "الطبق الجانبي", type: "single", required: true,
-    options: [
-      { id: "rice", name: "Vermicelli rice", nameAr: "أرز بالشعيرية", price: 0 },
-      { id: "fries", name: "Fries", nameAr: "بطاطا مقلية", price: 0 },
-      { id: "grilled", name: "Grilled vegetables", nameAr: "خضار مشوية", price: 0.75 },
-      { id: "salad", name: "Green salad", nameAr: "سلطة خضراء", price: 0.75 },
-    ],
-  },
-  grillExtra: {
-    id: "extra", name: "Add on", nameAr: "إضافات", type: "multi", required: false,
-    options: [
-      { id: "garlic", name: "Garlic paste", nameAr: "ثومية", price: 0.5 },
-      { id: "hummus", name: "Side of hummus", nameAr: "صحن حمص", price: 2.0 },
-      { id: "skewer", name: "Extra skewer", nameAr: "سيخ إضافي", price: 3.5 },
-    ],
-  },
-  mansafPortion: {
-    id: "portion", name: "Portion", nameAr: "الحجم", type: "single", required: true,
-    options: [
-      { id: "one", name: "One person", nameAr: "لشخص واحد", price: 0 },
-      { id: "two", name: "Two people", nameAr: "لشخصين", price: 9.0 },
-      { id: "tray", name: "Sharing tray (4–5)", nameAr: "صينية (٤–٥)", price: 22.0 },
-    ],
-  },
-  mansafExtra: {
-    id: "extra", name: "Add on", nameAr: "إضافات", type: "multi", required: false,
-    options: [
-      { id: "jameed", name: "Extra jameed sauce", nameAr: "مرقة جميد إضافية", price: 1.5 },
-      { id: "nuts", name: "Extra almonds & pine nuts", nameAr: "لوز وصنوبر إضافي", price: 1.75 },
-      { id: "shank", name: "Lamb shank cut", nameAr: "قطعة موزة", price: 4.0 },
-    ],
-  },
-  cheeseType: {
-    id: "cheese", name: "Cheese", nameAr: "نوع الجبنة", type: "single", required: true,
-    options: [
-      { id: "akkawi", name: "Akkawi", nameAr: "عكاوي", price: 0 },
-      { id: "nabulsi", name: "Nabulsi", nameAr: "نابلسي", price: 0.5 },
-      { id: "mix", name: "Mixed cheese", nameAr: "جبنة مشكّلة", price: 0.75 },
-    ],
-  },
-  sajExtra: {
-    id: "extra", name: "Add on", nameAr: "إضافات", type: "multi", required: false,
-    options: [
-      { id: "veg", name: "Tomato, mint, olives", nameAr: "بندورة ونعناع وزيتون", price: 0.5 },
-      { id: "sujuk", name: "Sujuk", nameAr: "سجق", price: 1.25 },
-      { id: "roll", name: "Rolled", nameAr: "ملفوف", price: 0 },
-    ],
-  },
-  sugar: {
-    id: "sugar", name: "Sugar", nameAr: "السكر", type: "single", required: true,
-    options: [
-      { id: "none", name: "No sugar", nameAr: "بدون سكر", price: 0 },
-      { id: "light", name: "Lightly sweet", nameAr: "سكر خفيف", price: 0 },
-      { id: "full", name: "Sweet", nameAr: "سكر زيادة", price: 0 },
-    ],
-  },
-  ice: {
-    id: "ice", name: "Ice", nameAr: "الثلج", type: "single", required: true,
-    options: [
-      { id: "yes", name: "With ice", nameAr: "مع ثلج", price: 0 },
-      { id: "no", name: "No ice", nameAr: "بدون ثلج", price: 0 },
-    ],
-  },
-  knafehSize: {
-    id: "size", name: "Portion", nameAr: "الحجم", type: "single", required: true,
-    options: [
-      { id: "piece", name: "Single piece", nameAr: "قطعة", price: 0 },
-      { id: "half", name: "Half kilo tray", nameAr: "نص كيلو", price: 5.5 },
-    ],
-  },
-};
-
-/* ------------------------------- menu -------------------------------- */
-
-const CATEGORIES = [
-  { id: "mezze", name: "Mezze", nameAr: "مقبلات" },
-  { id: "saj", name: "From the Saj", nameAr: "من الصاج" },
-  { id: "grills", name: "Grills", nameAr: "المشاوي" },
-  { id: "mains", name: "Mains", nameAr: "الأطباق الرئيسية" },
-  { id: "sweets", name: "Sweets", nameAr: "الحلويات" },
-  { id: "drinks", name: "Drinks", nameAr: "المشروبات" },
-];
-
-const MENU = [
-  { id: "hummus", cat: "mezze", name: "Hummus Beiruti", nameAr: "حمص بيروتي", price: 3.75, min: 6,
-    desc: "Chickpeas whipped with tahini, lemon and garlic, finished with parsley and olive oil.",
-    descAr: "حمص مخفوق مع الطحينة والليمون والثوم، مع بقدونس وزيت زيتون.",
-    tags: ["vegan", "popular"], allergens: ["sesame"], emoji: "🥣", hue: 44,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Lebanese_style_hummus.jpg/500px-Lebanese_style_hummus.jpg",
-    groups: [G.mezzeSize, G.breadHummus, G.hummusTop] },
-
-  { id: "mutabbal", cat: "mezze", name: "Mutabbal", nameAr: "متبل باذنجان", price: 3.50, min: 6,
-    desc: "Charred aubergine folded through tahini and yoghurt, topped with pomegranate.",
-    descAr: "باذنجان مشوي على الفحم مع طحينة ولبن، مزيّن بحب الرمان.",
-    tags: ["vegetarian"], allergens: ["sesame", "dairy"], emoji: "🍆", hue: 280,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/Baba_Ganoush_05of05_%288735238183%29.jpg/500px-Baba_Ganoush_05of05_%288735238183%29.jpg",
-    groups: [G.mezzeSize, G.breadHummus] },
-
-  { id: "fattoush", cat: "mezze", name: "Fattoush", nameAr: "فتوش", price: 4.25, min: 7,
-    desc: "Garden vegetables, purslane and toasted bread in a sumac and pomegranate dressing.",
-    descAr: "خضار طازجة وبقلة وخبز محمّص مع دبس رمان وسمّاق.",
-    tags: ["vegan"], allergens: ["gluten"], emoji: "🥗", hue: 96,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/93/Fattoush_mixed-salad.jpg/500px-Fattoush_mixed-salad.jpg",
-    groups: [G.mezzeSize] },
-
-  { id: "kibbeh", cat: "mezze", name: "Fried Kibbeh", nameAr: "كبة مقلية", price: 5.50, min: 12,
-    desc: "Four bulgur shells filled with spiced lamb, onion and pine nuts.",
-    descAr: "أربع حبات برغل محشية بلحمة وبصل وصنوبر.",
-    tags: ["popular"], allergens: ["gluten", "nuts"], emoji: "🥟", hue: 28,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/Kibbeh3.jpg/500px-Kibbeh3.jpg",
-    groups: [G.spice] },
-
-  { id: "warak", cat: "mezze", name: "Warak Enab", nameAr: "ورق عنب", price: 4.00, min: 8,
-    desc: "Vine leaves rolled with rice, tomato and lemon. Served cold.",
-    descAr: "ورق عنب محشي بالأرز والبندورة والليمون، يُقدّم بارداً.",
-    tags: ["vegan"], allergens: [], emoji: "🍃", hue: 110,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a8/Etli_yaprak_sarma_in_Turkey.jpg/500px-Etli_yaprak_sarma_in_Turkey.jpg",
-    groups: [G.mezzeSize] },
-
-  { id: "zaatar", cat: "saj", name: "Zaatar Manakish", nameAr: "مناقيش زعتر", price: 1.75, min: 8,
-    desc: "Saj dough brushed with wild thyme and olive oil, baked to order.",
-    descAr: "عجينة صاج بالزعتر البلدي وزيت الزيتون، تُخبز عند الطلب.",
-    tags: ["vegan", "breakfast"], allergens: ["gluten", "sesame"], emoji: "🫓", hue: 82,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/Zaatar_Mankousheh.jpg/500px-Zaatar_Mankousheh.jpg",
-    groups: [G.sajExtra] },
-
-  { id: "jibneh", cat: "saj", name: "Cheese Manakish", nameAr: "مناقيش جبنة", price: 2.50, min: 8,
-    desc: "Stretchy white cheese on saj dough, straight off the dome.",
-    descAr: "جبنة بيضاء مطاطة على عجين الصاج، من الصاج مباشرة.",
-    tags: ["vegetarian"], allergens: ["gluten", "dairy"], emoji: "🧀", hue: 48,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/3/31/Za%27atar_with_cheese_manakish_at_Agasi%2C_Lajpat_Nagar%2C_Delhi_%282025-10-04%29.jpg/500px-Za%27atar_with_cheese_manakish_at_Agasi%2C_Lajpat_Nagar%2C_Delhi_%282025-10-04%29.jpg",
-    groups: [G.cheeseType, G.sajExtra] },
-
-  { id: "arayes", cat: "saj", name: "Arayes Lahm", nameAr: "عرايس لحمة", price: 5.00, min: 12,
-    desc: "Bread pressed with minced lamb, tomato and chilli, grilled over charcoal.",
-    descAr: "خبز محشي بلحمة مفرومة وبندورة وفليفلة، مشوي على الفحم.",
-    tags: ["popular"], allergens: ["gluten"], emoji: "🔥", hue: 14,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f1/Arayes_%283%29.jpg/500px-Arayes_%283%29.jpg",
-    groups: [G.spice, G.grillExtra] },
-
-  { id: "mishwi", cat: "grills", name: "Mixed Grill", nameAr: "مشاوي مشكّلة", price: 14.50, min: 22,
-    desc: "Shish tawook, kofta and lamb cubes over charcoal, with grilled tomato and onion.",
-    descAr: "شيش طاووق وكفتة وقطع لحم على الفحم، مع بندورة وبصل مشوي.",
-    tags: ["popular", "sharing"], allergens: [], emoji: "🍢", hue: 18,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Arabic_MixedGrill.JPG/500px-Arabic_MixedGrill.JPG",
-    groups: [G.doneness, G.spice, G.grillSide, G.grillExtra] },
-
-  { id: "tawook", cat: "grills", name: "Shish Tawook", nameAr: "شيش طاووق", price: 9.75, min: 18,
-    desc: "Chicken marinated overnight in yoghurt, garlic and lemon. Three skewers.",
-    descAr: "دجاج متبّل ليلة كاملة باللبن والثوم والليمون. ثلاثة أسياخ.",
-    tags: [], allergens: ["dairy"], emoji: "🍗", hue: 36,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/Tavuk_%C5%9Ei%C5%9F.jpg/500px-Tavuk_%C5%9Ei%C5%9F.jpg",
-    groups: [G.spice, G.grillSide, G.grillExtra] },
-
-  { id: "kofta", cat: "grills", name: "Kofta Khashkhash", nameAr: "كفتة خشخاش", price: 9.00, min: 18,
-    desc: "Minced lamb with parsley and chilli, grilled and finished in tomato butter.",
-    descAr: "لحمة مفرومة مع بقدونس وفليفلة، مشوية ومغطاة بصلصة البندورة.",
-    tags: ["spicy"], allergens: ["dairy"], emoji: "🌶️", hue: 8,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2f/Kafta_shish_kebab_and_grilled_vegetables_on_salad_-_Cambridge%2C_MA.jpg/500px-Kafta_shish_kebab_and_grilled_vegetables_on_salad_-_Cambridge%2C_MA.jpg",
-    groups: [G.spice, G.grillSide, G.grillExtra] },
-
-  { id: "riyash", cat: "grills", name: "Lamb Chops", nameAr: "ريش غنم", price: 16.00, min: 25,
-    desc: "Four chops from young lamb, salted and grilled plain over charcoal.",
-    descAr: "أربع قطع ريش غنم صغير، مملّحة ومشوية على الفحم.",
-    tags: ["chef"], allergens: [], emoji: "🍖", hue: 12,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Liat_Portal_for_Foodie_Disorder_-_Homemade_Lamb_Chops_with_Rice_and_Grilled_Vegetables.jpg/500px-Liat_Portal_for_Foodie_Disorder_-_Homemade_Lamb_Chops_with_Rice_and_Grilled_Vegetables.jpg",
-    groups: [G.doneness, G.grillSide, G.grillExtra] },
-
-  { id: "mansaf", cat: "mains", name: "Mansaf", nameAr: "منسف أردني", price: 12.50, min: 30,
-    desc: "Lamb slow-cooked in fermented jameed over rice and shrak bread, with almonds.",
-    descAr: "لحم غنم مطبوخ على مهل بالجميد، فوق الأرز وخبز الشراك، مع اللوز.",
-    tags: ["national", "popular"], allergens: ["dairy", "gluten", "nuts"], emoji: "🍲", hue: 40,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/86/Mansaf%2C_the_traditional_dish_of_Jordan.jpg/500px-Mansaf%2C_the_traditional_dish_of_Jordan.jpg",
-    groups: [G.mansafPortion, G.mansafExtra] },
-
-  { id: "maqluba", cat: "mains", name: "Chicken Maqluba", nameAr: "مقلوبة دجاج", price: 9.50, min: 25,
-    desc: "Rice layered with chicken, aubergine and cauliflower, turned out at the table.",
-    descAr: "أرز مع دجاج وباذنجان وزهرة، تُقلب أمامك على الطاولة.",
-    tags: [], allergens: ["nuts"], emoji: "🍛", hue: 34,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2d/Makluba.JPG/500px-Makluba.JPG",
-    groups: [G.spice] },
-
-  { id: "sayadieh", cat: "mains", name: "Sayadieh", nameAr: "صيادية سمك", price: 13.00, min: 28,
-    desc: "Fish fillet on caramelised onion rice with tahini sauce and toasted nuts.",
-    descAr: "فيليه سمك على أرز بالبصل المحمّر مع صلصة طحينة ومكسرات.",
-    tags: ["chef"], allergens: ["fish", "sesame", "nuts"], emoji: "🐟", hue: 200,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/86/Fish_Sayadieh.jpg/500px-Fish_Sayadieh.jpg",
-    groups: [G.spice] },
-
-  { id: "knafeh", cat: "sweets", name: "Knafeh Nabulsieh", nameAr: "كنافة نابلسية", price: 4.50, min: 12,
-    desc: "Shredded pastry over melting cheese, soaked in orange blossom syrup.",
-    descAr: "شعيرات كنافة فوق جبنة ذائبة، مسقية بقطر ماء الزهر.",
-    tags: ["popular"], allergens: ["gluten", "dairy", "nuts"], emoji: "🍯", hue: 30,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Qwaider_al_nabulsi_kunafa_al_nama_%2811389641075%29.jpg/500px-Qwaider_al_nabulsi_kunafa_al_nama_%2811389641075%29.jpg",
-    groups: [G.knafehSize] },
-
-  { id: "baklava", cat: "sweets", name: "Baklava Plate", nameAr: "بقلاوة", price: 3.75, min: 4,
-    desc: "Six assorted pieces with pistachio, walnut and cashew.",
-    descAr: "ست قطع مشكّلة بالفستق والجوز والكاجو.",
-    tags: ["vegetarian"], allergens: ["gluten", "nuts", "dairy"], emoji: "🥮", hue: 52,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/Baklava_kymi_greece.jpg/500px-Baklava_kymi_greece.jpg",
-    groups: [] },
-
-  { id: "limonana", cat: "drinks", name: "Mint Lemonade", nameAr: "ليمون بالنعناع", price: 2.75, min: 4,
-    desc: "Lemon blended with fresh mint and crushed ice.",
-    descAr: "ليمون مخفوق مع نعناع طازج وثلج مجروش.",
-    tags: ["popular"], allergens: [], emoji: "🍋", hue: 76,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/94/Mint_lemonade.jpg/500px-Mint_lemonade.jpg",
-    groups: [G.sugar, G.ice] },
-
-  { id: "qahwa", cat: "drinks", name: "Arabic Coffee", nameAr: "قهوة عربية", price: 1.50, min: 5,
-    desc: "Light roast with cardamom, poured from the dallah.",
-    descAr: "قهوة فاتحة بالهيل، تُصبّ من الدلّة.",
-    tags: [], allergens: [], emoji: "☕", hue: 26,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/49/A_dallah_a_traditional_Arabic_coffee_pot_with_cups_and_coffee_beans.jpg/500px-A_dallah_a_traditional_Arabic_coffee_pot_with_cups_and_coffee_beans.jpg",
-    groups: [G.sugar] },
-
-  { id: "orange", cat: "drinks", name: "Fresh Orange", nameAr: "عصير برتقال", price: 3.00, min: 4,
-    desc: "Pressed to order. Nothing added.",
-    descAr: "يُعصر عند الطلب. بدون أي إضافات.",
-    tags: ["vegan"], allergens: [], emoji: "🍊", hue: 30,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/Glass_of_Fresh_Orange_Juice.jpg/500px-Glass_of_Fresh_Orange_Juice.jpg",
-    groups: [G.ice] },
-
-  { id: "ayran", cat: "drinks", name: "Ayran", nameAr: "عيران", price: 1.25, min: 2,
-    desc: "Salted yoghurt drink, shaken cold.",
-    descAr: "لبن مملّح مخفوق بارد.",
-    tags: [], allergens: ["dairy"], emoji: "🥛", hue: 190,
-    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a0/Ayran_%28large_glass%29.jpg/500px-Ayran_%28large_glass%29.jpg",
-    groups: [G.ice] },
-];
-
-const UNAVAILABLE = ["sayadieh"]; // 86'd by the kitchen today
+/* Charges and the edit window are branch settings now — they arrive on
+   net.config and are stamped onto each round as it is sent. The menu is
+   shared too: MENU below is what ships, and anything the back office has
+   edited is merged over it by effectiveMenu(). */
 
 /* ------------------------------ strings ------------------------------ */
 
@@ -365,6 +99,15 @@ const T = {
 
 /* ------------------------------ helpers ------------------------------ */
 
+/* The live menu — what ships, plus whatever the back office has edited.
+   It sits at module scope because the helpers here and the components
+   below read it outside the React tree; App republishes it whenever the
+   shared menu changes, before any child renders. */
+let MENU = SHIPPED_MENU;
+
+/* which section of the kitchen cooks a given dish */
+const stationOf = (itemId) => CAT_STATION[MENU.find((m) => m.id === itemId)?.cat] || "hot";
+
 const jd = (n) => n.toFixed(2);
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -410,10 +153,19 @@ function needsCustomization(item) {
   return item.groups.some((g) => g.required && g.type === "multi");
 }
 
+/* mods are [en, ar] pairs baked in when the round was sent; sel is the raw
+   choice this device made. Either may be missing depending on where the
+   line came from. */
+function lineLabel(item, line, isAr) {
+  if (line.mods?.length) return line.mods.map((m) => (isAr ? m[1] : m[0])).filter(Boolean);
+  return selLabel(item, line.sel, isAr ? "ar" : "en");
+}
+
 function selLabel(item, sel, lang) {
   const parts = [];
+  if (!item) return parts;
   item.groups.forEach((g) => {
-    const chosen = sel[g.id];
+    const chosen = (sel || {})[g.id];
     if (!chosen) return;
     const ids = Array.isArray(chosen) ? chosen : [chosen];
     ids.forEach((oid) => {
@@ -461,7 +213,22 @@ export default function App() {
   const isAr = lang === "ar";
 
   const [cart, setCart] = useState([]);
-  const [rounds, setRounds] = useState([]);
+
+  /* Rounds are no longer local. Once a table sends food it belongs to the
+     kitchen, so the board is the source of truth and this screen reads
+     its own table out of it. */
+  const net = useLeaf({ branchId: BRANCH_ID, role: "guest" });
+  const cfg = net.config;
+  /* the kitchen's edits reach the phone the same way orders do */
+  MENU = useMemo(() => effectiveMenu(net.menu), [net.menu]);
+  const rounds = useMemo(
+    () =>
+      net.orders
+        .filter((o) => o.tableNo === TABLE_NO && !o.paid)
+        .sort((a, b) => a.placedAt - b.placedAt)
+        .map((o, i) => ({ ...o, n: i + 1, at: o.placedAt })),
+    [net.orders]
+  );
   const [sheet, setSheet] = useState(null);       // item being customised
   const [view, setView] = useState("menu");       // menu | bill | paid
   const [chatOpen, setChatOpen] = useState(false);
@@ -473,6 +240,13 @@ export default function App() {
   const [receipt, setReceipt] = useState(null);
   const [activeCat, setActiveCat] = useState("mezze");
   const [mobileCart, setMobileCart] = useState(false);
+  const [confirmed, setConfirmed] = useState({});   // rounds the guest released early
+
+  /* Anything the kitchen has taken off tonight, plus the static list */
+  const soldOut = useMemo(
+    () => [...new Set([...UNAVAILABLE, ...net.eightySixed])],
+    [net.eightySixed]
+  );
 
   const menuRef = useRef(null);
   const catRefs = useRef({});
@@ -604,65 +378,135 @@ export default function App() {
 
   const submit = () => {
     if (!cart.length) return;
-    setRounds((r) => [...r, { id: uid(), n: r.length + 1, lines: cart, at: Date.now() }]);
+    const round = rounds.length + 1;
+    net.placeOrder({
+      id: `T${TABLE_NO}-R${round}-${uid()}`,
+      branchId: BRANCH_ID,
+      tableNo: TABLE_NO,
+      round,
+      placedAt: Date.now(),
+      status: "new",
+      paid: false,
+      bumpedAt: null,
+      note: null,
+      /* the terms this round was sent under — a later change to either
+         must not reprice or re-lock food already with the kitchen */
+      rates: { service: cfg.service, tax: cfg.tax },
+      editWindow: cfg.editWindow,
+      lines: cart.map((l) => ({
+        ...l,
+        done: false,
+        station: stationOf(l.itemId),
+        mods: selLabel(MENU.find((m) => m.id === l.itemId), l.sel, "en")
+          .map((en, i) => [en, selLabel(MENU.find((m) => m.id === l.itemId), l.sel, "ar")[i]]),
+      })),
+    });
     setCart([]);
     setMobileCart(false);
     setToast({ kind: "ok", msg: t.placed });
   };
 
-  const lastRound = rounds[rounds.length - 1];
-  const editLeft = lastRound ? Math.max(0, EDIT_WINDOW_SEC - Math.floor((now - lastRound.at) / 1000)) : 0;
-  const canEdit = editLeft > 0;
+  /* Rounds this phone has actually seen open, so a table closed for the
+     previous guests never drops a stale receipt on the next ones. */
+  const mine = useRef(new Set());
+  useEffect(() => { rounds.forEach((r) => mine.current.add(r.id)); }, [rounds]);
 
+  /* A waiter taking cash closes the table from the floor. The phone has to
+     land on the same thank-you screen a card payment reaches, rather than
+     sitting on a bill that has already been settled. */
+  useEffect(() => {
+    if (receipt) return;
+    const closed = net.orders.filter(
+      (o) => o.tableNo === TABLE_NO && o.paid && mine.current.has(o.id)
+    );
+    if (!closed.length) return;
+    const m = tableMoney(closed, cfg);
+    setReceipt({
+      no: "BAS-" + new Date().getFullYear() + "-" + Math.floor(100000 + Math.random() * 899999),
+      at: new Date(),
+      method: closed[0].payMethod,
+      totals: { subtotal: m.sub, service: m.service, tax: m.tax, tipAmt: 0, grand: m.grand },
+      total: m.grand,
+    });
+    setView("paid");
+  }, [net.orders, receipt]); // eslint-disable-line
+
+  const lastRound = rounds[rounds.length - 1];
+  /* the window this round was sent under, not whatever it is now */
+  const editWindow = lastRound?.editWindow ?? cfg.editWindow;
+  const editLeft =
+    lastRound && !confirmed[lastRound.id] && !lastRound.confirmedAt
+      ? Math.max(0, editWindow - Math.floor((now - lastRound.at) / 1000))
+      : 0;
+  /* the kitchen having started is a harder stop than the clock */
+  const canEdit = editLeft > 0 && lastRound?.status === "new";
+
+  /* Pulling a round back removes it from the kitchen board outright. The
+     line should never be looking at a ticket the guest has withdrawn. */
   const editLast = () => {
     if (!lastRound) return;
-    setCart((c) => [...lastRound.lines, ...c]);
-    setRounds((r) => r.slice(0, -1));
+    setCart((c) => [...lastRound.lines.map(({ done, station, mods, ...l }) => l), ...c]);
+    net.cancelOrder(lastRound.id);
     setToast({ kind: "warn", msg: t.editOrder });
   };
   const cancelLast = () => {
     if (!lastRound) return;
-    setRounds((r) => r.slice(0, -1));
+    net.cancelOrder(lastRound.id);
     setToast({ kind: "warn", msg: t.cancelled });
   };
+  /* Ending the window early: the guest is telling the kitchen to start now */
   const confirmLast = () => {
     if (!lastRound) return;
-    setRounds((r) =>
-      r.map((round, i) => (i === r.length - 1 ? { ...round, at: Date.now() - EDIT_WINDOW_SEC * 1000 } : round))
-    );
+    /* local first so this phone reacts instantly, and on the wire so the
+       pass stops holding a ticket the table has already released */
+    setConfirmed((c) => ({ ...c, [lastRound.id]: true }));
+    net.confirmOrder(lastRound.id);
     setToast({ kind: "ok", msg: t.confirmed });
   };
 
+  /* What the guest sees is what the kitchen has actually done, not a
+     countdown pretending to be progress. */
   const roundStatus = (r) => {
-    const age = (now - r.at) / 1000;
-    if (age < EDIT_WINDOW_SEC) return "received";
-    if (age < EDIT_WINDOW_SEC + 60) return "preparing";
-    if (age < EDIT_WINDOW_SEC + 100) return "ready";
-    return "served";
+    if (r.status === "served") return "served";
+    if (r.status === "ready") return "ready";
+    if (r.status === "firing") return "preparing";
+    return (now - r.at) / 1000 < (r.editWindow ?? cfg.editWindow) &&
+      !confirmed[r.id] && !r.confirmedAt
+      ? "received"
+      : "preparing";
   };
 
   /* ------------------------------- bill -------------------------------- */
 
   const allLines = rounds.flatMap((r) => r.lines);
-  const subtotal = allLines.reduce((s, l) => s + l.unit * l.qty, 0);
-  const service = subtotal * SERVICE_RATE;
-  const tax = (subtotal + service) * TAX_RATE;
+  /* charged per round at the rates that round was placed under */
+  const bill = tableMoney(rounds, cfg);
+  const subtotal = bill.sub;
+  const service = bill.service;
+  const tax = bill.tax;
   const tipAmt = subtotal * tip;
-  const grand = subtotal + service + tax + tipAmt;
+  const grand = bill.grand + tipAmt;
 
   const pay = () => {
     if (!payMethod) return;
     if (payMethod === "cash") {
+      /* the only path that needs a person: this is what raises the table
+         on the floor and gives the cashier the close control */
+      net.requestPay(TABLE_NO, "cash");
       setToast({ kind: "ok", msg: t.cashNote });
       return;
     }
     setPaying(true);
     setTimeout(() => {
       setPaying(false);
+      net.closeTable(TABLE_NO, payMethod);
+      /* totals are snapshotted: closing the table marks these rounds paid,
+         and the live bill math drops to zero the moment it does */
       setReceipt({
         no: "BAS-" + new Date().getFullYear() + "-" + Math.floor(100000 + Math.random() * 899999),
         at: new Date(),
         method: payMethod,
+        totals: { subtotal, service, tax, tipAmt, grand },
         total: grand,
       });
       setView("paid");
@@ -670,8 +514,9 @@ export default function App() {
   };
 
   const reset = () => {
-    setCart([]); setRounds([]); setReceipt(null); setPayMethod(null);
+    setCart([]); setConfirmed({}); setReceipt(null); setPayMethod(null);
     setTip(0); setView("menu");
+    mine.current.clear();   // a new sitting: the closed rounds aren't ours
   };
 
   const goCat = (id) => {
@@ -687,7 +532,7 @@ export default function App() {
 
       <Header
         t={t} lang={lang} setLang={setLang} isAr={isAr}
-        onCall={() => setToast({ kind: "ok", msg: t.calling })}
+        onCall={() => { net.callWaiter(TABLE_NO); setToast({ kind: "ok", msg: t.calling }); }}
         onBill={() => { setView("bill"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
         showBill={rounds.length > 0 && view === "menu"}
       />
@@ -725,7 +570,7 @@ export default function App() {
                       <MenuCard
                         key={m.id} item={m} t={t} isAr={isAr}
                         count={counts[m.id] || 0}
-                        out={UNAVAILABLE.includes(m.id)}
+                        out={soldOut.includes(m.id)}
                         onPick={() => setSheet({ item: m })}
                         onQuickAdd={() => {
                           if (needsCustomization(m)) setSheet({ item: m });
@@ -755,7 +600,7 @@ export default function App() {
                 onClear={() => { setCart([]); setToast({ kind: "warn", msg: t.cartCleared }); }}
                 onSubmit={submit}
                 rounds={rounds} roundStatus={roundStatus}
-                canEdit={canEdit} editLeft={editLeft}
+                canEdit={canEdit} editLeft={editLeft} editWindow={editWindow}
                 onEdit={editLast} onCancel={cancelLast} onConfirm={confirmLast}
                 onBill={() => { setView("bill"); setMobileCart(false); window.scrollTo({ top: 0 }); }}
                 onClose={() => setMobileCart(false)}
@@ -1021,7 +866,7 @@ function ItemSheet({ item, line, t, isAr, onClose, onAdd, onRemove }) {
 
 function CartPanel({
   t, isAr, cart, setQty, onEditLine, total, onClear, onSubmit,
-  rounds, roundStatus, canEdit, editLeft, onEdit, onCancel, onConfirm, onBill, onClose,
+  rounds, roundStatus, canEdit, editLeft, editWindow, onEdit, onCancel, onConfirm, onBill, onClose,
 }) {
   const STEPS = ["received", "preparing", "ready", "served"];
   return (
@@ -1060,7 +905,7 @@ function CartPanel({
                     <span className="line-q">{l.qty}×</span>
                     <div className="line-mid">
                       <span className="line-n">{isAr ? it.nameAr : it.name}</span>
-                      <span className="line-o">{selLabel(it, l.sel, isAr ? "ar" : "en").join(" · ")}</span>
+                      <span className="line-o">{lineLabel(it, l, isAr).join(" · ")}</span>
                       {l.note && <span className="line-note">“{l.note}”</span>}
                     </div>
                     <span className="line-p">{jd(l.unit * l.qty)}</span>
@@ -1074,7 +919,7 @@ function CartPanel({
                     <span>{t.editWindow}</span>
                     <span className="count">{editLeft}s</span>
                   </div>
-                  <div className="bar"><i style={{ width: (editLeft / EDIT_WINDOW_SEC) * 100 + "%" }} /></div>
+                  <div className="bar"><i style={{ width: (editLeft / editWindow) * 100 + "%" }} /></div>
                   <div className="editwin-btns">
                     <button className="mini" onClick={onEdit}>{t.editOrder}</button>
                     <button className="mini mini-danger" onClick={onCancel}>{t.cancelOrder}</button>
@@ -1113,7 +958,7 @@ function CartPanel({
               </div>
               <div className="line-mid">
                 <span className="line-n">{isAr ? it.nameAr : it.name}</span>
-                <span className="line-o">{selLabel(it, l.sel, isAr ? "ar" : "en").join(" · ")}</span>
+                <span className="line-o">{lineLabel(it, l, isAr).join(" · ")}</span>
                 {l.note && <span className="line-note">“{l.note}”</span>}
                 <div className="line-actions">
                   <button className="line-edit" onClick={() => onEditLine(l.lineId)}>
@@ -1205,7 +1050,7 @@ function Bill({
             <div className="bill-round-h">{t.round} {r.n}</div>
             {r.lines.map((l) => {
               const it = MENU.find((m) => m.id === l.itemId);
-              const opts = selLabel(it, l.sel, isAr ? "ar" : "en");
+              const opts = lineLabel(it, l, isAr);
               return (
                 <div key={l.lineId} className="bline">
                   <span className="bq">{l.qty}</span>
@@ -1272,8 +1117,22 @@ function Bill({
 
 /* ------------------------------ receipt ------------------------------- */
 
+/* tenders the floor can close a table with — the phone never offers these,
+   but it has to be able to print one on the receipt */
+const STAFF_METHODS = {
+  cliq: ["CliQ", "كليك"],
+  visa: ["Visa machine", "جهاز الفيزا"],
+  cash: ["Cash", "نقداً"],
+};
+
 function Receipt({ t, isAr, receipt, rounds, subtotal, service, tax, tipAmt, grand, onReset }) {
   const m = METHODS.find((x) => x.id === receipt.method);
+  const staff = STAFF_METHODS[receipt.method];
+  const methodLabel = m ? (isAr ? m.nameAr : m.name)
+    : staff ? (isAr ? staff[1] : staff[0])
+    : receipt.method || "—";
+  /* the snapshot taken at closing time; the live figures are zero by now */
+  const s = receipt.totals || { subtotal, service, tax, tipAmt, grand };
   return (
     <div className="billwrap">
       <div className="billcard">
@@ -1285,16 +1144,16 @@ function Receipt({ t, isAr, receipt, rounds, subtotal, service, tax, tipAmt, gra
 
         <div className="inv">
           <div className="inv-row"><span>{t.invoice}</span><b className="mono">{receipt.no}</b></div>
-          <div className="inv-row"><span>{t.table}</span><b>12</b></div>
-          <div className="inv-row"><span>{receipt.at.toLocaleString(isAr ? "ar-JO" : "en-GB")}</span><b>{isAr ? m.nameAr : m.name}</b></div>
+          <div className="inv-row"><span>{t.table}</span><b>{TABLE_NO}</b></div>
+          <div className="inv-row"><span>{receipt.at.toLocaleString(isAr ? "ar-JO" : "en-GB")}</span><b>{methodLabel}</b></div>
         </div>
 
         <div className="totals">
-          <div className="sumline"><span>{t.subtotal}</span><span>{jd(subtotal)}</span></div>
-          <div className="sumline"><span>{t.service}</span><span>{jd(service)}</span></div>
-          <div className="sumline"><span>{t.tax}</span><span>{jd(tax)}</span></div>
-          {tipAmt > 0 && <div className="sumline"><span>{t.tip}</span><span>{jd(tipAmt)}</span></div>}
-          <div className="sumline sumline-grand"><span>{t.paid}</span><span>{jd(grand)} JD</span></div>
+          <div className="sumline"><span>{t.subtotal}</span><span>{jd(s.subtotal)}</span></div>
+          <div className="sumline"><span>{t.service}</span><span>{jd(s.service)}</span></div>
+          <div className="sumline"><span>{t.tax}</span><span>{jd(s.tax)}</span></div>
+          {s.tipAmt > 0 && <div className="sumline"><span>{t.tip}</span><span>{jd(s.tipAmt)}</span></div>}
+          <div className="sumline sumline-grand"><span>{t.paid}</span><span>{jd(s.grand)} JD</span></div>
         </div>
 
         <button className="ghost full" onClick={onReset}>{t.newOrder}</button>
@@ -1319,7 +1178,7 @@ function ChefChat({ t, isAr, lang, onClose, onPick }) {
         id: m.id, name: m.name, ar: m.nameAr, price: m.price, cat: m.cat,
         desc: m.desc, allergens: m.allergens, tags: m.tags,
         options: m.groups.map((g) => g.name + ": " + g.options.map((o) => o.name).join("/")),
-        available: !UNAVAILABLE.includes(m.id),
+        available: !soldOut.includes(m.id),
       })),
     []
   );

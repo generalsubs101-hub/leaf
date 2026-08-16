@@ -2,3 +2,13 @@ node_modules/
 dist/
 release/
 *.log
+
+# real credentials never go in — .env.example is the template
+.env
+.env.local
+
+# browser-automation scratch output
+.playwright-mcp/
+
+# local snapshot taken before the back-office rewrite
+backup-*/
