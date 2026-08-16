@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useLeaf } from "./lib/store.js";
-import { DEFAULT_CONFIG, tableMoney } from "./lib/model.js";
+import { DEFAULT_CONFIG, tableMoney, pinHash, DEFAULT_PINS } from "./lib/model.js";
 import { createPortal } from "react-dom";
 import QRCode from "qrcode";
 import {
@@ -272,6 +272,11 @@ const T = {
     alg_gluten: "Gluten", alg_dairy: "Dairy", alg_nuts: "Nuts", alg_sesame: "Sesame",
     alg_egg: "Egg", alg_fish: "Fish",
     signedInAs: "Signed in as", switchRole: "Switch role", demoRole: "Demo — switch role",
+    viewAs: "View as", signOut: "Sign out",
+    signInSub: "Enter your staff PIN", wrongPin: "That PIN wasn't recognised", clear: "Clear",
+    pinsTitle: "Staff PINs", pinsSub: "The PIN each role signs in with. Four digits or more.",
+    pinDefault: "still the shipped default",
+    pinsWarn: "Stored hashed, so a PIN can be set but never read back. This keeps the back office out of a guest's hands; it is not a substitute for real accounts.",
     branch: "Branch", open: "Open", live: "Live", today: "Today",
     connecting: "Connecting", thisDevice: "This device", waiterCalled: "Asked for a waiter",
     answerCall: "On my way", markServed: "Delivered",
@@ -354,6 +359,11 @@ const T = {
     alg_gluten: "غلوتين", alg_dairy: "ألبان", alg_nuts: "مكسرات", alg_sesame: "سمسم",
     alg_egg: "بيض", alg_fish: "سمك",
     signedInAs: "تسجيل الدخول باسم", switchRole: "تبديل الدور", demoRole: "تجريبي — بدّل الدور",
+    viewAs: "اعرض كـ", signOut: "تسجيل الخروج",
+    signInSub: "أدخل رمز الموظف", wrongPin: "الرمز غير صحيح", clear: "مسح",
+    pinsTitle: "رموز الموظفين", pinsSub: "الرمز اللي بيدخل فيه كل دور. أربع خانات أو أكثر.",
+    pinDefault: "لسا الرمز الافتراضي",
+    pinsWarn: "بينحفظ مشفّر، فبتقدر تغيّره بس ما بتقدر تشوفه. هذا بيمنع الزبون من الدخول، بس مش بديل عن حسابات حقيقية.",
     branch: "الفرع", open: "مفتوح", live: "مباشر", today: "اليوم",
     connecting: "جاري الاتصال", thisDevice: "هذا الجهاز", waiterCalled: "طلبت نادل",
     answerCall: "أنا بالطريق", markServed: "تم التقديم",
@@ -490,8 +500,9 @@ export default function App() {
   const t = T[lang];
   const isAr = lang === "ar";
 
-  const [roleId, setRoleId] = useState("manager");
-  const role = ROLES.find((r) => r.id === roleId);
+  /* null until someone signs in; the PIN they use decides the role */
+  const [roleId, setRoleId] = useState(() => readSession());
+  const role = ROLES.find((r) => r.id === roleId) || ROLES[1];
 
   const store = useStore();
   /* republished before any child renders, so every screen — pass, floor,
@@ -538,6 +549,24 @@ export default function App() {
   const NAV = ["floor", "kds", "menu", "tables", "reports", "history", "team", "settings"].filter(can);
   const kioskKds = roleId === "kitchen";
 
+  const signIn = (r) => {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ role: r, at: Date.now() }));
+    setRoleId(r);
+    setView((store.config.perms?.[r] || ["floor"])[0]);
+  };
+  const signOut = () => {
+    localStorage.removeItem(SESSION_KEY);
+    setRoleId(null);
+  };
+
+  /* nothing of the back office renders until a PIN has been accepted */
+  if (!roleId) {
+    return (
+      <SignIn t={t} isAr={isAr} lang={lang} setLang={setLang}
+        staff={store.config.staff || DEFAULT_CONFIG.staff} onIn={signIn} />
+    );
+  }
+
   return (
     <div className={"bo" + (kioskKds ? " bo-kiosk" : "")} dir={t.dir} lang={lang}>
       <style>{CSS}</style>
@@ -576,14 +605,19 @@ export default function App() {
                 <span>{isAr ? role.nameAr : role.name}</span>
               </div>
             </div>
-            <label className="rolepick">
-              <span>{t.demoRole}</span>
-              <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
-                {ROLES.map((r) => (
-                  <option key={r.id} value={r.id}>{isAr ? r.nameAr : r.name}</option>
-                ))}
-              </select>
-            </label>
+            {/* an owner can look through another role's eyes without
+                signing out; everyone else sees only their own screens */}
+            {roleId === "owner" && (
+              <label className="rolepick">
+                <span>{t.viewAs}</span>
+                <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+                  {ROLES.map((r) => (
+                    <option key={r.id} value={r.id}>{isAr ? r.nameAr : r.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <button className="btn-quiet signout" onClick={signOut}>{t.signOut}</button>
           </div>
         </aside>
       )}
@@ -626,13 +660,7 @@ export default function App() {
               {isAr ? "EN" : "ع"}
             </button>
             {kioskKds && (
-              <label className="rolepick rolepick-top">
-                <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
-                  {ROLES.map((r) => (
-                    <option key={r.id} value={r.id}>{isAr ? r.nameAr : r.name}</option>
-                  ))}
-                </select>
-              </label>
+              <button className="btn-quiet signout signout-top" onClick={signOut}>{t.signOut}</button>
             )}
           </div>
         </header>
@@ -1139,6 +1167,78 @@ function TableDrawer({ t, isAr, now, tableNo, orders, onClose, onCloseTable, can
 
 const statusLabel = (t, s) =>
   s === "new" ? t.newTicket : s === "firing" ? t.inKitchen : s === "ready" ? t.bump : t.eating;
+
+/* ------------------------------ sign in ------------------------------ */
+/* Each role has a PIN. Entering one signs you in as that role, which is
+   also what decides the permissions — so the door and the permission
+   model are the same thing rather than two ideas that can disagree. */
+
+const SESSION_KEY = "leaf:bo:session";
+
+function readSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    /* a shift, not forever: a screen left on the pass signs itself out */
+    if (!s.role || Date.now() - s.at > 16 * 60 * 60 * 1000) return null;
+    return s.role;
+  } catch { return null; }
+}
+
+function SignIn({ t, isAr, lang, setLang, staff, onIn }) {
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState(false);
+  const [shake, setShake] = useState(0);
+
+  const submit = (value) => {
+    const h = pinHash(value);
+    const role = Object.keys(staff).find((r) => staff[r] === h);
+    if (!role) {
+      setErr(true); setPin(""); setShake((n) => n + 1);
+      return;
+    }
+    onIn(role);
+  };
+
+  const press = (d) => {
+    setErr(false);
+    const next = (pin + d).slice(0, 8);
+    setPin(next);
+    if (next.length >= 4) setTimeout(() => submit(next), 120);
+  };
+
+  return (
+    <div className="signin" dir={t.dir} lang={lang}>
+      <style>{CSS}</style>
+      <div className={"signin-card" + (err ? " signin-bad" : "")} key={shake}>
+        <span className="signin-mark"><Leaf size={22} color="#EDEFE6" /></span>
+        <h1>Leaf</h1>
+        <p>{t.signInSub}</p>
+
+        <div className="signin-dots">
+          {[0, 1, 2, 3].map((i) => (
+            <i key={i} className={pin.length > i ? "on" : ""} />
+          ))}
+        </div>
+        {err && <p className="signin-err">{t.wrongPin}</p>}
+
+        <div className="pad">
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
+            <button key={n} onClick={() => press(String(n))}>{n}</button>
+          ))}
+          <button className="pad-ghost" onClick={() => { setPin(""); setErr(false); }}>{t.clear}</button>
+          <button onClick={() => press("0")}>0</button>
+          <button className="pad-ghost" onClick={() => setPin(pin.slice(0, -1))}>←</button>
+        </div>
+
+        <button className="signin-lang" onClick={() => setLang(isAr ? "en" : "ar")}>
+          {isAr ? "English" : "عربي"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /* ---------------------------- dish editor ---------------------------- */
 /* Photos are stored inline on the shared log, so they are downscaled hard
@@ -2262,6 +2362,52 @@ function Charges({ t, store, canEdit }) {
   );
 }
 
+/* PINs are stored hashed, so they can be set but never read back — the
+   only way out of a forgotten PIN is to set a new one. */
+function StaffPins({ t, isAr, store }) {
+  const [draft, setDraft] = useState({});
+  const [done, setDone] = useState(null);
+  const staff = store.config.staff || DEFAULT_CONFIG.staff;
+
+  const save = (roleId) => {
+    const pin = (draft[roleId] || "").trim();
+    if (pin.length < 4) return;
+    store.setConfig({ staff: { ...staff, [roleId]: pinHash(pin) } });
+    setDraft({ ...draft, [roleId]: "" });
+    setDone(roleId);
+    setTimeout(() => setDone(null), 2000);
+  };
+
+  return (
+    <section className="panel">
+      <h3>{t.pinsTitle}</h3>
+      <p className="panel-sub">{t.pinsSub}</p>
+      <ul className="kv kv-edit">
+        {ROLES.map((r) => (
+          <li key={r.id}>
+            <span>
+              {isAr ? r.nameAr : r.name}
+              {DEFAULT_CONFIG.staff[r.id] === staff[r.id] && (
+                <em className="pin-default"> · {t.pinDefault} {DEFAULT_PINS[r.id]}</em>
+              )}
+            </span>
+            <span className="field">
+              <input type="password" inputMode="numeric" maxLength={8} placeholder="••••"
+                value={draft[r.id] || ""}
+                onChange={(e) => setDraft({ ...draft, [r.id]: e.target.value.replace(/\D/g, "") })} />
+              <button className="btn-quiet pin-save" onClick={() => save(r.id)}
+                disabled={(draft[r.id] || "").length < 4}>
+                {done === r.id ? t.saved : t.save}
+              </button>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="panel-empty">{t.pinsWarn}</p>
+    </section>
+  );
+}
+
 function Settings({ t, isAr, store, canEdit }) {
   return (
     <>
@@ -2317,6 +2463,8 @@ function Settings({ t, isAr, store, canEdit }) {
           </ul>
         )}
       </section>
+
+      {canEdit && <StaffPins t={t} isAr={isAr} store={store} />}
 
       <ClearDay t={t} store={store} />
     </>
@@ -2678,6 +2826,51 @@ html,body,#root{margin:0;padding:0;height:100%;background:#071D1B}
 .qr-busy{display:inline-block;margin-top:5px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;
   color:var(--brass);border:1px solid rgba(227,163,60,.4);border-radius:99px;padding:1px 8px}
 .row-total td{border-top:1px solid var(--line2);color:var(--paper)}
+
+/* ------------------------------ sign in ------------------------------ */
+/* the palette lives on .bo, and this screen renders outside it — so it
+   carries its own copy rather than inheriting black-on-black */
+.signin{
+  --ink:#071D1B; --panel:#0E2A27; --panel2:#153B36; --raise:#1B4740;
+  --paper:#EDEFE6; --muted:#8CA69D;
+  --line:rgba(237,239,230,.10); --line2:rgba(237,239,230,.18); --line-solid:#2C4F49;
+  --sumac:#E05B3C; --brass:#E3A33C; --mint:#4FC08D; --bone:#DCE3D5;
+  position:fixed;inset:0;display:grid;place-items:center;padding:20px;
+  background:radial-gradient(120% 90% at 50% -10%,#123f37,#071D1B 62%);
+  color:var(--paper);font-family:'IBM Plex Sans Arabic',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;font-size:14px}
+.signin button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+.signin-card{width:min(330px,100%);display:flex;flex-direction:column;align-items:center;
+  padding:30px 26px 22px;border-radius:20px;background:var(--panel);
+  border:1px solid var(--line);box-shadow:0 26px 70px rgba(0,0,0,.42)}
+.signin-bad{animation:nope .34s}
+@keyframes nope{
+  0%,100%{transform:translateX(0)} 20%{transform:translateX(-7px)}
+  45%{transform:translateX(6px)} 70%{transform:translateX(-3px)}}
+.signin-mark{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;
+  background:linear-gradient(140deg,#146639,#2FBE79)}
+.signin h1{font-family:'Bricolage Grotesque',sans-serif;font-size:23px;font-weight:800;
+  letter-spacing:-.02em;margin:12px 0 3px}
+.signin p{margin:0;font-size:12.5px;color:var(--muted)}
+.signin-dots{display:flex;gap:11px;margin:20px 0 4px}
+.signin-dots i{width:11px;height:11px;border-radius:50%;background:transparent;
+  border:1.5px solid var(--line-solid);transition:all .14s}
+.signin-dots i.on{background:var(--mint);border-color:var(--mint)}
+.signin-err{margin-top:9px;font-size:12px;color:var(--sumac)}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:20px;width:100%}
+.pad button{height:52px;border-radius:13px;font-family:'IBM Plex Mono',monospace;font-size:19px;
+  background:var(--panel2);color:var(--paper);border:1px solid var(--line);transition:all .1s}
+.pad button:hover{background:var(--raise)}
+.pad button:active{transform:scale(.96)}
+.pad-ghost{font-family:inherit !important;font-size:12.5px !important;color:var(--muted) !important;
+  background:transparent !important}
+.signin-lang{margin-top:16px;font-size:12px;color:var(--muted)}
+.signin-lang:hover{color:var(--paper)}
+.btn-quiet.signout{width:100%;margin-top:2px}
+.btn-quiet.signout-top{width:auto;padding:6px 12px}
+.pin-default{font-style:normal;font-size:10.5px;color:var(--brass)}
+.btn-quiet.pin-save{width:auto;padding:7px 12px}
+.btn-quiet.pin-save:disabled{opacity:.4;cursor:not-allowed}
 
 /* --------------------------- dish editor ----------------------------- */
 .drawer-wide{width:min(560px,100%)}

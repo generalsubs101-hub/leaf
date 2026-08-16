@@ -23,11 +23,31 @@ export const DEFAULT_PERMS = {
   kitchen: ["kds", "eightysix"],
 };
 
+/* A door, not a lock. The whole app is client-side, so this keeps the back
+   office out of a curious guest's hands — it does not withstand anyone
+   willing to read the bundle. Real accounts need a server: with Supabase
+   configured, move this to Supabase Auth and check the session instead. */
+export const pinHash = (pin) => {
+  let h = 5381;
+  const s = "leaf:" + String(pin ?? "");
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+};
+
+export const DEFAULT_PINS = {
+  owner: "1111", manager: "2222", server: "3333", kitchen: "4444",
+};
+
 export const DEFAULT_CONFIG = {
   service: SERVICE_RATE,
   tax: TAX_RATE,
   editWindow: EDIT_WINDOW_SEC,
   perms: DEFAULT_PERMS,
+  /* hashes only — the plain PINs above are the shipped defaults and are
+     meant to be changed from Settings on the first day */
+  staff: Object.fromEntries(
+    Object.entries(DEFAULT_PINS).map(([role, pin]) => [role, pinHash(pin)])
+  ),
 };
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
