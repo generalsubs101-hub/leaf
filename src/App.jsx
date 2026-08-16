@@ -702,7 +702,7 @@ function Header({ t, lang, setLang, isAr, onCall, onBill, showBill }) {
         <div className="hdr-right">
           <div className="table-tag">
             <span className="dot" />
-            <span>{t.table} <b>12</b></span>
+            <span>{t.table} <b>{TABLE_NO}</b></span>
           </div>
           <button className="ghost" onClick={onCall}>{t.callWaiter}</button>
           {showBill && <button className="ghost" onClick={onBill}>{t.requestBill}</button>}
@@ -1042,7 +1042,7 @@ function Bill({
         <div className="bill-head">
           <Thyme size={14} color="var(--sumac)" />
           <h2>{t.bill}</h2>
-          <p>{t.billFor}</p>
+          <p>{t.table} {TABLE_NO} · Leaf</p>
         </div>
 
         {rounds.map((r) => (
